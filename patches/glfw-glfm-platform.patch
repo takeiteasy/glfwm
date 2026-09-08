@@ -1,0 +1,100 @@
+--- a/deps/glfw/include/GLFW/glfw3.h
++++ b/deps/glfw/include/GLFW/glfw3.h
+@@ -1342,6 +1342,7 @@
+ #define GLFW_PLATFORM_WAYLAND       0x00060003
+ #define GLFW_PLATFORM_X11           0x00060004
+ #define GLFW_PLATFORM_NULL          0x00060005
++#define GLFW_PLATFORM_GLFM          0x00060006
+ /*! @} */
+ 
+ /* Reserved platform define for external Emscripten ports: 0x00060006
+--- a/deps/glfw/src/platform.h
++++ b/deps/glfw/src/platform.h
+@@ -90,6 +90,17 @@
+  #define GLFW_GLX_LIBRARY_CONTEXT_STATE
+ #endif
+ 
++#if defined(_GLFW_GLFM)
++ #include "glfm_platform.h"
++#else
++ #define GLFW_GLFM_WINDOW_STATE
++ #define GLFW_GLFM_MONITOR_STATE
++ #define GLFW_GLFM_CURSOR_STATE
++ #define GLFW_GLFM_LIBRARY_WINDOW_STATE
++ #define GLFW_GLFM_CONTEXT_STATE
++ #define GLFW_GLFM_LIBRARY_CONTEXT_STATE
++#endif
++
+ #include "null_joystick.h"
+ 
+ #if defined(_GLFW_WIN32)
+@@ -122,6 +133,7 @@
+         GLFW_COCOA_WINDOW_STATE \
+         GLFW_WAYLAND_WINDOW_STATE \
+         GLFW_X11_WINDOW_STATE \
++        GLFW_GLFM_WINDOW_STATE \
+         GLFW_NULL_WINDOW_STATE \
+ 
+ #define GLFW_PLATFORM_MONITOR_STATE \
+@@ -129,6 +141,7 @@
+         GLFW_COCOA_MONITOR_STATE \
+         GLFW_WAYLAND_MONITOR_STATE \
+         GLFW_X11_MONITOR_STATE \
++        GLFW_GLFM_MONITOR_STATE \
+         GLFW_NULL_MONITOR_STATE \
+ 
+ #define GLFW_PLATFORM_CURSOR_STATE \
+@@ -136,6 +149,7 @@
+         GLFW_COCOA_CURSOR_STATE \
+         GLFW_WAYLAND_CURSOR_STATE \
+         GLFW_X11_CURSOR_STATE \
++        GLFW_GLFM_CURSOR_STATE \
+         GLFW_NULL_CURSOR_STATE \
+ 
+ #define GLFW_PLATFORM_JOYSTICK_STATE \
+@@ -148,6 +162,7 @@
+         GLFW_COCOA_LIBRARY_WINDOW_STATE \
+         GLFW_WAYLAND_LIBRARY_WINDOW_STATE \
+         GLFW_X11_LIBRARY_WINDOW_STATE \
++        GLFW_GLFM_LIBRARY_WINDOW_STATE \
+         GLFW_NULL_LIBRARY_WINDOW_STATE \
+ 
+ #define GLFW_PLATFORM_LIBRARY_JOYSTICK_STATE \
+--- a/deps/glfw/src/platform.c
++++ b/deps/glfw/src/platform.c
+@@ -56,6 +56,9 @@
+ #if defined(_GLFW_X11)
+     { GLFW_PLATFORM_X11, _glfwConnectX11 },
+ #endif
++#if defined(_GLFW_GLFM)
++    { GLFW_PLATFORM_GLFM, _glfwConnectGlfm },
++#endif
+ };
+ 
+ GLFWbool _glfwSelectPlatform(int desiredID, _GLFWplatform* platform)
+@@ -68,6 +71,7 @@
+         desiredID != GLFW_PLATFORM_COCOA &&
+         desiredID != GLFW_PLATFORM_WAYLAND &&
+         desiredID != GLFW_PLATFORM_X11 &&
++        desiredID != GLFW_PLATFORM_GLFM &&
+         desiredID != GLFW_PLATFORM_NULL)
+     {
+         _glfwInputError(GLFW_INVALID_ENUM, "Invalid platform ID 0x%08X", desiredID);
+@@ -147,6 +151,7 @@
+         platformID != GLFW_PLATFORM_COCOA &&
+         platformID != GLFW_PLATFORM_WAYLAND &&
+         platformID != GLFW_PLATFORM_X11 &&
++        platformID != GLFW_PLATFORM_GLFM &&
+         platformID != GLFW_PLATFORM_NULL)
+     {
+         _glfwInputError(GLFW_INVALID_ENUM, "Invalid platform ID 0x%08X", platformID);
+@@ -182,6 +187,9 @@
+ #if defined(_GLFW_X11)
+         " X11 GLX"
+ #endif
++#if defined(_GLFW_GLFM)
++        " GLFM"
++#endif
+         " Null"
+         " EGL"
+         " OSMesa"
