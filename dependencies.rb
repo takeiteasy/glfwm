@@ -185,6 +185,9 @@ packages = [
     include: [
       'glfw3webgpu.{c,h}',
       'CMakeLists.txt'
+    ],
+    patches: [
+      'patches/glfw3webgpu-glfm-platform.patch'
     ]
   },
   {
@@ -194,6 +197,9 @@ packages = [
     include: [
       ['src/*!', 'deps/glfm'],
       ['include/*!', 'deps/glfm']
+    ],
+    patches: [
+      'patches/glfm-metal-pacing.patch'
     ]
   }
 ]

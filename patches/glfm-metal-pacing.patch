@@ -1,0 +1,131 @@
+--- a/src/glfm_apple.m
++++ b/src/glfm_apple.m
+@@ -15,6 +15,7 @@
+ #elif TARGET_OS_OSX
+ #  import <AppKit/AppKit.h>
+ #  import <Carbon/Carbon.h> // For kVK key codes in HIToolbox/Events.h
++#  import <CoreVideo/CVDisplayLink.h>
+ #  import <IOKit/hidsystem/IOLLEvent.h> // For NX_DEVICE modifier keys
+ #  define UIView NSView
+ #  define UIViewAutoresizingFlexibleWidth NSViewWidthSizable
+@@ -156,6 +157,11 @@
+ @property(nonatomic, assign) BOOL surfaceCreatedNotified;
+ @property(nonatomic, assign) BOOL refreshRequested;
+ @property(nonatomic, assign) BOOL isDrawing;
++#if TARGET_OS_IOS || TARGET_OS_TV
++@property(nonatomic, strong) CADisplayLink *displayLink;
++#else
++@property(nonatomic, assign) CVDisplayLinkRef cvDisplayLink;
++#endif
+ 
+ @end
+ 
+@@ -173,6 +179,25 @@
+ @synthesize glfmDisplay = _glfmDisplay, preRenderCallback = _preRenderCallback;
+ @dynamic renderingAPI, animating;
+ 
++#if TARGET_OS_OSX
++
++// Paces rendering from a CVDisplayLink; the tick runs on the main thread so
++// GLFM callbacks keep firing there (as they did through MTKView).
++static CVReturn glfmMetalDisplayLinkCallback(CVDisplayLinkRef displayLink, const CVTimeStamp *inNow,
++                                             const CVTimeStamp *inOutputTime, CVOptionFlags flagsIn,
++                                             CVOptionFlags *flagsOut, void *displayLinkContext) {
++    (void)displayLink;
++    (void)inNow;
++    (void)inOutputTime;
++    (void)flagsIn;
++    (void)flagsOut;
++    GLFMMetalView *view = (__bridge GLFMMetalView *)displayLinkContext;
++    [view performSelectorOnMainThread:@selector(glfmDisplayLinkTick) withObject:nil waitUntilDone:NO];
++    return kCVReturnSuccess;
++}
++
++#endif // TARGET_OS_OSX
++
+ - (instancetype)initWithFrame:(CGRect)frame contentScaleFactor:(CGFloat)contentScaleFactor
+                        device:(id<MTLDevice>)device glfmDisplay:(GLFMDisplay *)glfmDisplay {
+     if ((self = [super initWithFrame:frame device:device])) {
+@@ -233,6 +258,21 @@
+         }
+ 
+         self.sampleCount = (glfmDisplay->multisample == GLFMMultisampleNone) ? 1 : 4;
++
++        // Do not let MTKView manage drawables or run its own display link:
++        // the Metal layer is owned by the application (e.g. a WebGPU surface
++        // created from it), which must have exclusive use of the layer's
++        // drawable pool. GLFM paces rendering with its own display link.
++        self.paused = YES;
++        self.enableSetNeedsDisplay = NO;
++#if TARGET_OS_IOS || TARGET_OS_TV
++        self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(glfmDisplayLinkTick)];
++        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
++#else
++        CVDisplayLinkCreateWithActiveCGDisplays(&self->_cvDisplayLink);
++        CVDisplayLinkSetOutputCallback(self->_cvDisplayLink, glfmMetalDisplayLinkCallback, (__bridge void *)self);
++        CVDisplayLinkStart(self->_cvDisplayLink);
++#endif
+     }
+     return self;
+ }
+@@ -299,16 +339,27 @@
+ }
+ 
+ - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
+-
++    (void)view;
++    (void)size;
+ }
+ 
+-- (void)drawInMTKView:(MTKView *)view {
++// Drives the GLFM render/surface callbacks. MTKView is paused (see init), so
++// this is called from GLFM's own display link; the layer's drawable size is
++// managed here as well, since MTKView no longer updates it.
++- (void)glfmDisplayLinkTick {
+     if (self.isDrawing) {
+         return;
+     }
+     self.isDrawing = YES;
+-    int newDrawableWidth = (int)self.drawableSize.width;
+-    int newDrawableHeight = (int)self.drawableSize.height;
++
++    CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
++    int newDrawableWidth = (int)(metalLayer.bounds.size.width * metalLayer.contentsScale);
++    int newDrawableHeight = (int)(metalLayer.bounds.size.height * metalLayer.contentsScale);
++    if ((int)metalLayer.drawableSize.width != newDrawableWidth ||
++        (int)metalLayer.drawableSize.height != newDrawableHeight) {
++        metalLayer.drawableSize = CGSizeMake(newDrawableWidth, newDrawableHeight);
++    }
++
+     if (!self.surfaceCreatedNotified) {
+         self.surfaceCreatedNotified = YES;
+         [self requestRefresh];
+@@ -344,6 +395,11 @@
+     self.isDrawing = NO;
+ }
+ 
++- (void)drawInMTKView:(MTKView *)view {
++    (void)view;
++    [self glfmDisplayLinkTick];
++}
++
+ - (void)swapBuffers {
+     // Do nothing
+ }
+@@ -365,6 +421,16 @@
+ #endif
+ 
+ - (void)dealloc {
++#if TARGET_OS_IOS || TARGET_OS_TV
++    [self.displayLink invalidate];
++    self.displayLink = nil;
++#else
++    if (self->_cvDisplayLink) {
++        CVDisplayLinkStop(self->_cvDisplayLink);
++        CVDisplayLinkRelease(self->_cvDisplayLink);
++        self->_cvDisplayLink = NULL;
++    }
++#endif
+     GLFM_RELEASE(_preRenderCallback);
+ #if !__has_feature(objc_arc)
+     [super dealloc];

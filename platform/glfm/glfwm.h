@@ -67,6 +67,19 @@ typedef int (*glfwm_entry_fn)(int argc, char** argv);
 // GLFM_GLFW_APP_MAIN macro.
 void glfwmSetEntryPoint(glfwm_entry_fn entry);
 
+// *Apple platforms only*: Returns a pointer to the GLFM view (an MTKView)
+// backing the window, or NULL if Metal is unavailable or the view does not
+// exist yet. The view's layer is a CAMetalLayer; presenting it is the
+// application's responsibility (e.g. via a WebGPU surface created with
+// glfwCreateWindowWGPUSurface).
+void* glfwmGetMetalView(void);
+
+// *Apple platforms only*: Returns the CAMetalLayer to render into, or NULL
+// if Metal is unavailable. This is a dedicated layer managed by the backend
+// (GLFM's MTKView draws underneath it, so the WebGPU surface owns the
+// layer's drawable pool exclusively). Used internally by glfw3webgpu.
+void* glfwmGetMetalLayer(void);
+
 #ifdef GLFM_GLFW_PLATFORM
 
 // Registers fn as the application entry point at load time.

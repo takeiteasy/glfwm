@@ -1,0 +1,47 @@
+--- a/deps/glfw3webgpu/glfw3webgpu.c
++++ b/deps/glfw3webgpu/glfw3webgpu.c
+@@ -61,6 +61,11 @@
+ #  include <QuartzCore/CAMetalLayer.h>
+ #endif
+ 
++#ifdef GLFW_EXPOSE_NATIVE_GLFM
++#  include "glfwm.h"
++#  include <QuartzCore/CAMetalLayer.h>
++#endif
++
+ #ifndef __EMSCRIPTEN__
+ #  include <GLFW/glfw3native.h>
+ #endif
+@@ -174,6 +179,32 @@
+     }
+ #endif // GLFW_EXPOSE_NATIVE_EMSCRIPTEN
+ 
++#ifdef GLFW_EXPOSE_NATIVE_GLFM
++    case GLFW_PLATFORM_GLFM: {
++        // GLFM platform (glfwm backend): rendering goes into a dedicated
++        // CAMetalLayer managed by the backend (the GLFM MTKView keeps its
++        // own drawable pool underneath).
++        (void) window;
++        void* metal_layer = glfwmGetMetalLayer();
++        if (!metal_layer) {
++            // Metal layer not available (not an Apple platform, or the GLFM
++            // surface does not exist yet).
++            return NULL;
++        }
++
++        WGPUSurfaceSourceMetalLayer fromMetalLayer;
++        fromMetalLayer.chain.sType = WGPUSType_SurfaceSourceMetalLayer;
++        fromMetalLayer.chain.next = NULL;
++        fromMetalLayer.layer = metal_layer;
++
++        WGPUSurfaceDescriptor surfaceDescriptor;
++        surfaceDescriptor.nextInChain = &fromMetalLayer.chain;
++        surfaceDescriptor.label = (WGPUStringView){ NULL, WGPU_STRLEN };
++
++        return wgpuInstanceCreateSurface(instance, &surfaceDescriptor);
++    }
++#endif // GLFW_EXPOSE_NATIVE_GLFM
++
+     default:
+         // Unsupported platform
+         return NULL;

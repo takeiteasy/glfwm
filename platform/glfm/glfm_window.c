@@ -62,6 +62,7 @@ static struct
     GLFWbool        frameTick;      // a display frame is due
     GLFWbool        kick;           // postEmptyEvent
     GLFWbool        terminating;    // glfwTerminate was called
+    GLFWbool        surfaceReady;   // GLFM surface exists (view is rendering)
     _GLFMEvent      events[_GLFM_EVENT_QUEUE_CAPACITY];
     int             head;
     int             count;
@@ -300,6 +301,10 @@ void _glfmGlfmRenderFunc(GLFMDisplay* display)
 void _glfmGlfmSurfaceCreatedFunc(GLFMDisplay* display, int width, int height)
 {
     (void) display;
+    pthread_mutex_lock(&glfwm_ev.lock);
+    glfwm_ev.surfaceReady = GLFW_TRUE;
+    pthread_cond_broadcast(&glfwm_ev.cond);
+    pthread_mutex_unlock(&glfwm_ev.lock);
     if (_glfw.initialized)
         _glfw.glfm.surfaceCreated = GLFW_TRUE;
     // width/height are in pixels; pack logical size alongside
@@ -473,6 +478,19 @@ GLFWbool _glfwCreateWindowGlfm(_GLFWwindow* window,
     window->glfm.contentScale = (float) glfmGetDisplayScale(_glfmGlfmDisplay());
 
     _glfw.glfm.window = window;
+
+    // GLFM creates its view after glfmMain returns (view loading), so the
+    // surface may not exist yet when the app thread gets here. Wait until
+    // GLFM reports the surface created: this restores the GLFW contract that
+    // the window (and its native view) exists when createWindow returns, and
+    // makes surface accessors (e.g. the Metal view for WebGPU) immediately
+    // usable. The condvar is shared with the event queue; the GLFM thread
+    // only needs the lock briefly to signal.
+    pthread_mutex_lock(&glfwm_ev.lock);
+    while (!glfwm_ev.surfaceReady)
+        pthread_cond_wait(&glfwm_ev.cond, &glfwm_ev.lock);
+    pthread_mutex_unlock(&glfwm_ev.lock);
+
     return GLFW_TRUE;
 }
 

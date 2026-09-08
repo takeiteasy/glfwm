@@ -1,0 +1,97 @@
+# xcodegen spec for the glfwm WebGPU triangle example (iOS).
+#
+# The app target compiles only the example source; all dependencies are the
+# static libraries produced by the Makefile:
+#   - libglfw3webgpu_glfm.a  (glfw3webgpu bridge, GLFM platform case)
+#   - libglfw3_glfm.a        (GLFW + GLFM backend; provides the entry point)
+#   - libwgpu_native.a       (wgpu-native, Metal + WGSL)
+#
+# Generate with: xcodegen generate --spec xcode/project.yml --project build/xcode
+# Device builds need a signing team: set DEVELOPMENT_TEAM below or via
+#   xcodebuild ... DEVELOPMENT_TEAM=<team-id>
+name: GlfwmTriangle
+options:
+  bundleIdPrefix: net.takeiteasy.glfwm
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: net.takeiteasy.glfwm.triangle
+    INFOPLIST_FILE: ../../xcode/App-Info.plist
+    ARCHS: arm64
+    GCC_PREPROCESSOR_DEFINITIONS:
+      - GLFW_INCLUDE_NONE=1
+    HEADER_SEARCH_PATHS:
+      - ../../deps
+      - ../../deps/glfw/include
+      - ../../platform/glfm
+      - ../../deps/webgpu
+      - ../../deps/glfw3webgpu
+    OTHER_LDFLAGS:
+      # Archive order matters for the linker (single pass): the bridge before
+      # GLFW, wgpu last.
+      - -lglfw3webgpu_glfm
+      - -lglfw3_glfm
+      - -lwgpu_native
+
+targets:
+  Triangle-Sim:
+    type: application
+    platform: iOS
+    sources:
+      - ../examples/triangle.c
+    settings:
+      base:
+        PRODUCT_NAME: triangle
+        LIBRARY_SEARCH_PATHS:
+          - ../../build/ios-sim
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: CoreGraphics.framework
+      - sdk: QuartzCore.framework
+      - sdk: IOSurface.framework
+      - sdk: OpenGLES.framework
+      - sdk: CoreMotion.framework
+      - sdk: CoreHaptics.framework
+
+  Triangle-Device:
+    type: application
+    platform: iOS
+    sources:
+      - ../examples/triangle.c
+    settings:
+      base:
+        PRODUCT_NAME: triangle
+        LIBRARY_SEARCH_PATHS:
+          - ../../build/ios-device
+        CODE_SIGN_IDENTITY: Apple Development
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: CoreGraphics.framework
+      - sdk: QuartzCore.framework
+      - sdk: IOSurface.framework
+      - sdk: OpenGLES.framework
+      - sdk: CoreMotion.framework
+      - sdk: CoreHaptics.framework
+
+schemes:
+  Triangle-Sim:
+    build:
+      targets:
+        Triangle-Sim: all
+    run:
+      config: Debug
+  Triangle-Device:
+    build:
+      targets:
+        Triangle-Device: all
+    run:
+      config: Debug

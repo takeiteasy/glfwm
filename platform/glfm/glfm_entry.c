@@ -61,6 +61,16 @@ void glfwmSetEntryPoint(glfwm_entry_fn entry)
     glfwm__entry = entry;
 }
 
+void* glfwmGetMetalView(void)
+{
+    // glfmGetMetalView is a plain C API; returns NULL when Metal is not
+    // available or the GLFM view is not (yet) an MTKView.
+    GLFMDisplay* display = glfwm__display;
+    if (!display)
+        return NULL;
+    return glfmGetMetalView(display);
+}
+
 //////////////////////////////////////////////////////////////////////////
 //////                        App thread                           ///////
 //////////////////////////////////////////////////////////////////////////
