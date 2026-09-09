@@ -128,6 +128,9 @@ int _glfwInitGlfm(void)
         return GLFW_FALSE;
     }
 
+    _glfw.glfm.focused = GLFW_TRUE;
+    _glfw.glfm.iconified = GLFW_FALSE;
+
     if (!_glfw.glfm.monitor)
         _glfwPollMonitorsGlfm();
 
@@ -144,6 +147,8 @@ void _glfwTerminateGlfm(void)
     _glfw.glfm.window = NULL;
     _glfw.glfm.monitor = NULL;
     _glfw.glfm.surfaceCreated = GLFW_FALSE;
+    _glfw.glfm.focused = GLFW_FALSE;
+    _glfw.glfm.iconified = GLFW_FALSE;
     // NOTE: the event queue and GLFMDisplay handle intentionally outlive
     // glfwTerminate (GLFM callbacks keep firing on the OS thread).
     _glfwTerminateEGL();

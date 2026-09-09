@@ -302,7 +302,7 @@ $(GLFM_HOST_DIR)/hello_glfwm.o: test/glfm_hello.c | $(GLFM_HOST_DIR)
 $(GLFM_HOST_DIR)/hello_glfwm: $(GLFM_HOST_DIR)/hello_glfwm.o $(GLFM_HOST_DIR)/libglfwm.a
 	$(CC) $^ -o $@ $(GLFM_HOST_FRAMEWORKS)
 
-$(GLFM_HOST_DIR)/triangle.o: examples/triangle.c | $(GLFM_HOST_DIR)
+$(GLFM_HOST_DIR)/triangle.o: test/triangle.c | $(GLFM_HOST_DIR)
 	$(CC) -DGLFM_GLFW_PLATFORM -DGLFW_INCLUDE_NONE -DGLFWM_WGPU $(GLFM_CFLAGS) $(GLFM_INCLUDES) -c $< -o $@
 
 # Links the single merged libglfwmw.a (GLFW + backend + bridge + wgpu-native).
@@ -311,6 +311,18 @@ $(GLFM_HOST_DIR)/triangle: $(GLFM_HOST_DIR)/triangle.o $(GLFM_HOST_DIR)/libglfwm
 
 .PHONY: glfwmw-host-triangle
 glfwmw-host-triangle: $(GLFM_HOST_DIR)/triangle
+
+# --- Host input regression (M2) ----------------------------------------------
+# Drives hello_glfwm with synthetic mouse/keyboard/scroll/clipboard events
+# (test/glfm_driver.m + test/glfm_input.sh). Requires Accessibility
+# permission for the calling terminal (CGEventPost); macOS host only.
+$(GLFM_HOST_DIR)/glfm_driver: test/glfm_driver.m | $(GLFM_HOST_DIR)
+	$(CC) -x objective-c -O2 -Wall -Wextra $< -o $@ \
+	  -framework Foundation -framework AppKit -framework CoreGraphics
+
+.PHONY: glfwm-host-input
+glfwm-host-input: $(GLFM_HOST_DIR)/hello_glfwm $(GLFM_HOST_DIR)/glfm_driver
+	bash test/glfm_input.sh $(GLFM_HOST_DIR)
 
 # --- Xcode project (xcodegen) ------------------------------------------------
 # Generates the iOS example project and builds/runs it on the simulator.

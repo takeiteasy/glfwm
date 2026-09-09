@@ -111,6 +111,8 @@ typedef struct _GLFWlibraryGlfm
     _GLFWwindow*    window;         // the single window
     _GLFWmonitor*   monitor;
     GLFWbool        surfaceCreated;
+    GLFWbool        focused;        // app focus state (backgrounded = false)
+    GLFWbool        iconified;      // background state (mirrors AppFocusFunc)
     char*           clipboardString;
 } _GLFWlibraryGlfm;
 
@@ -155,6 +157,7 @@ void _glfmGlfmCharFunc(GLFMDisplay* display, const char* string, int modifiers);
 bool _glfmGlfmMouseWheelFunc(GLFMDisplay* display, double x, double y,
                              GLFMMouseWheelDeltaType deltaType,
                              double deltaX, double deltaY, double deltaZ);
+void _glfmGlfmClipboardTextFunc(GLFMDisplay* display, const char* string);
 
 // ---- Connect / init ----
 

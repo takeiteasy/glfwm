@@ -109,14 +109,34 @@ void _glfwGetMonitorWorkareaGlfm(_GLFWmonitor* monitor,
     if (scale <= 0.0)
         scale = 1.0;
 
+    // Subtract the display chrome (status/navigation bars, safe area).
+    // GLFM reports insets in pixels; GLFW uses logical coords with a
+    // top-left origin.
+    double top = 0.0, right = 0.0, bottom = 0.0, left = 0.0;
+    if (display)
+        glfmGetDisplayChromeInsets(display, &top, &right, &bottom, &left);
+    top /= scale;
+    right /= scale;
+    bottom /= scale;
+    left /= scale;
+
+    int x = (int) left;
+    int y = (int) top;
+    int ww = (int) (w / scale - left - right);
+    int wh = (int) (h / scale - top - bottom);
+    if (ww < 0)
+        ww = 0;
+    if (wh < 0)
+        wh = 0;
+
     if (xpos)
-        *xpos = 0;
+        *xpos = x;
     if (ypos)
-        *ypos = 0;
+        *ypos = y;
     if (width)
-        *width = (int) (w / scale);
+        *width = ww;
     if (height)
-        *height = (int) (h / scale);
+        *height = wh;
 }
 
 GLFWvidmode* _glfwGetVideoModesGlfm(_GLFWmonitor* monitor, int* found)

@@ -2,7 +2,13 @@
 // GLFM platform backend (mobile / host development builds).
 //
 // Creates a NO_API window (WebGPU/Vulkan rendering is exercised by later
-// milestones), logs events, and exits after 120 frames.
+// milestones), logs events, and exits after 120 frames (override with the
+// GLFM_HELLO_FRAMES env var; 0 or negative = run until the window closes).
+//
+// Input helpers for the M2 host regression (test/glfm_driver.m):
+//   C - sets the clipboard to "glfwm-set"
+//   V - prints glfwGetClipboardString (sync-emulating read)
+// ESC closes the window.
 
 #include <GLFW/glfw3.h>
 #include <stdio.h>
@@ -19,6 +25,16 @@ static void glfwm__key(GLFWwindow* window, int key, int scancode, int action, in
     printf("key: key=%i scancode=%i action=%i mods=%i\n", key, scancode, action, mods);
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GLFW_TRUE);
+    if (action == GLFW_PRESS && key == GLFW_KEY_C)
+    {
+        glfwSetClipboardString(window, "glfwm-set");
+        printf("clipboard set: glfwm-set\n");
+    }
+    if (action == GLFW_PRESS && key == GLFW_KEY_V)
+    {
+        const char* text = glfwGetClipboardString(window);
+        printf("clipboard: %s\n", text ? text : "(null)");
+    }
 }
 
 static void glfwm__framebufferSize(GLFWwindow* window, int width, int height)
@@ -58,6 +74,24 @@ static void glfwm__windowRefresh(GLFWwindow* window)
     printf("window refresh\n");
 }
 
+static void glfwm__scroll(GLFWwindow* window, double x, double y)
+{
+    (void) window;
+    printf("scroll: %+.3f %+.3f\n", x, y);
+}
+
+static void glfwm__charEvent(GLFWwindow* window, unsigned int codepoint)
+{
+    (void) window;
+    printf("char: %u\n", codepoint);
+}
+
+static void glfwm__windowSize(GLFWwindow* window, int width, int height)
+{
+    (void) window;
+    printf("window size cb: %ix%i\n", width, height);
+}
+
 int app_main(int argc, char** argv)
 {
     (void) argc;
@@ -95,16 +129,21 @@ int app_main(int argc, char** argv)
     glfwSetWindowFocusCallback(window, glfwm__windowFocus);
     glfwSetWindowIconifyCallback(window, glfwm__windowIconify);
     glfwSetWindowRefreshCallback(window, glfwm__windowRefresh);
+    glfwSetScrollCallback(window, glfwm__scroll);
+    glfwSetCharCallback(window, glfwm__charEvent);
+    glfwSetWindowSizeCallback(window, glfwm__windowSize);
 
     int width, height, fbWidth, fbHeight;
     glfwGetWindowSize(window, &width, &height);
     glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
     printf("window size: %ix%i, framebuffer: %ix%i\n", width, height, fbWidth, fbHeight);
 
-    const int frameCount = 120;
+    const char* framesEnv = getenv("GLFM_HELLO_FRAMES");
+    const int frameCount = framesEnv ? atoi(framesEnv) : 120;
     double startTime = glfwGetTime();
     int frames = 0;
-    while (!glfwWindowShouldClose(window) && frames < frameCount)
+    while (!glfwWindowShouldClose(window) &&
+           (frameCount <= 0 || frames < frameCount))
     {
         glfwPollEvents();
         frames++;

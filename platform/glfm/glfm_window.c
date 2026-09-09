@@ -47,6 +47,18 @@
 #include <time.h>
 #include <errno.h>
 
+// Wheel delta normalization. GLFM pixel deltas are high-resolution trackpad
+// units; they are divided by this to match Cocoa's ScrollWheelPrecision
+// convention (one "line" of trackpad scroll feels like a line-based wheel).
+// Page deltas are converted at ~10 lines per page.
+#define GLFM_WHEEL_PIXEL_UNIT 10.0
+#define GLFM_WHEEL_PAGE_LINES 10.0
+
+// Seconds to wait for GLFM's asynchronous clipboard reader before falling
+// back to the cached string (local pasteboards resolve quickly; iCloud
+// handoff may not - that then behaves like a cache miss).
+#define GLFM_CLIPBOARD_TIMEOUT 1.0
+
 //////////////////////////////////////////////////////////////////////////
 //////                  Event queue (thread-safe)                  ///////
 //////////////////////////////////////////////////////////////////////////
@@ -69,6 +81,8 @@ static struct
     double          cursorX;        // last cursor position, logical coords
     double          cursorY;
     GLFWbool        cursorInside;
+    GLFWbool        clipboardPending;   // a clipboard read request is in flight
+    GLFWbool        clipboardDelivered; // the pending request was answered
 } glfwm_ev = {
     .lock = PTHREAD_MUTEX_INITIALIZER,
     .cond = PTHREAD_COND_INITIALIZER,
@@ -158,14 +172,19 @@ static void glfwm__dispatch(const _GLFMEvent* ev)
             window->glfm.width = ev->i2 >> 16;
             window->glfm.height = ev->i2 & 0xffff;
             _glfwInputFramebufferSize(window, ev->i0, ev->i1);
+            // The logical size changes with the surface (rotation, windowed
+            // host resizing); desktop GLFW fires both events on a resize.
+            _glfwInputWindowSize(window, window->glfm.width, window->glfm.height);
             break;
         case _GLFM_EVENT_WINDOW_REFRESH:
             _glfwInputWindowDamage(window);
             break;
         case _GLFM_EVENT_WINDOW_FOCUS:
+            _glfw.glfm.focused = ev->i0;
             _glfwInputWindowFocus(window, ev->i0);
             break;
         case _GLFM_EVENT_WINDOW_ICONIFY:
+            _glfw.glfm.iconified = ev->i0;
             _glfwInputWindowIconify(window, ev->i0);
             break;
         case _GLFM_EVENT_WINDOW_CLOSE:
@@ -358,7 +377,10 @@ bool _glfmGlfmTouchFunc(GLFMDisplay* display, int touch, GLFMTouchPhase phase,
                         double x, double y)
 {
     (void) display;
-    // GLFM reports positions in pixels; GLFW cursor positions are logical
+    // GLFM reports positions in pixels; GLFW cursor positions are logical.
+    // `touch` is the touch number for fingers (0 = primary) or the physical
+    // mouse button number when a real pointer is connected, so button 0 also
+    // carries the cursor for mice.
     double scale = glfmGetDisplayScale(display);
     if (scale <= 0.0)
         scale = 1.0;
@@ -368,19 +390,24 @@ bool _glfmGlfmTouchFunc(GLFMDisplay* display, int touch, GLFMTouchPhase phase,
     switch (phase)
     {
         case GLFMTouchPhaseBegan:
-            _glfmGlfmEnqueue(_GLFM_EVENT_CURSOR_POS, 0, 0, 0, px, py, NULL);
+            // Only the primary touch drives the cursor: additional fingers
+            // press buttons but must not move the mouse.
             if (touch == 0)
+            {
+                _glfmGlfmEnqueue(_GLFM_EVENT_CURSOR_POS, 0, 0, 0, px, py, NULL);
                 _glfmGlfmEnqueue(_GLFM_EVENT_CURSOR_ENTER, 1, 0, 0, 0, 0, NULL);
-            if (touch <= GLFW_MOUSE_BUTTON_LAST)
+            }
+            if (touch >= 0 && touch <= GLFW_MOUSE_BUTTON_LAST)
                 _glfmGlfmEnqueue(_GLFM_EVENT_MOUSE_BUTTON, touch, GLFW_PRESS, 0, 0, 0, NULL);
             break;
         case GLFMTouchPhaseMoved:
         case GLFMTouchPhaseHover:
-            _glfmGlfmEnqueue(_GLFM_EVENT_CURSOR_POS, 0, 0, 0, px, py, NULL);
+            if (touch == 0)
+                _glfmGlfmEnqueue(_GLFM_EVENT_CURSOR_POS, 0, 0, 0, px, py, NULL);
             break;
         case GLFMTouchPhaseEnded:
         case GLFMTouchPhaseCancelled:
-            if (touch <= GLFW_MOUSE_BUTTON_LAST)
+            if (touch >= 0 && touch <= GLFW_MOUSE_BUTTON_LAST)
                 _glfmGlfmEnqueue(_GLFM_EVENT_MOUSE_BUTTON, touch, GLFW_RELEASE, 0, 0, 0, NULL);
             if (touch == 0)
                 _glfmGlfmEnqueue(_GLFM_EVENT_CURSOR_ENTER, 0, 0, 0, 0, 0, NULL);
@@ -434,9 +461,24 @@ bool _glfmGlfmMouseWheelFunc(GLFMDisplay* display, double x, double y,
     (void) display;
     (void) x;
     (void) y;
-    (void) deltaType;
     (void) deltaZ;
-    _glfmGlfmEnqueue(_GLFM_EVENT_SCROLL, 0, 0, 0, deltaX, deltaY, NULL);
+    // Normalize deltas to GLFW's line convention (see the constants above)
+    double dx = deltaX, dy = deltaY;
+    switch (deltaType)
+    {
+        case GLFMMouseWheelDeltaPixel:
+            dx /= GLFM_WHEEL_PIXEL_UNIT;
+            dy /= GLFM_WHEEL_PIXEL_UNIT;
+            break;
+        case GLFMMouseWheelDeltaPage:
+            dx *= GLFM_WHEEL_PAGE_LINES;
+            dy *= GLFM_WHEEL_PAGE_LINES;
+            break;
+        case GLFMMouseWheelDeltaLine:
+        default:
+            break;
+    }
+    _glfmGlfmEnqueue(_GLFM_EVENT_SCROLL, 0, 0, 0, dx, dy, NULL);
     return true;
 }
 
@@ -661,13 +703,13 @@ void _glfwFocusWindowGlfm(_GLFWwindow* window)
 GLFWbool _glfwWindowFocusedGlfm(_GLFWwindow* window)
 {
     (void) window;
-    return GLFW_TRUE;
+    return _glfw.glfm.focused;
 }
 
 GLFWbool _glfwWindowIconifiedGlfm(_GLFWwindow* window)
 {
     (void) window;
-    return GLFW_FALSE;
+    return _glfw.glfm.iconified;
 }
 
 GLFWbool _glfwWindowVisibleGlfm(_GLFWwindow* window)
@@ -753,7 +795,21 @@ void _glfwSetCursorPosGlfm(_GLFWwindow* window, double x, double y)
 void _glfwSetCursorModeGlfm(_GLFWwindow* window, int mode)
 {
     (void) window;
-    (void) mode;
+    GLFMDisplay* display = _glfmGlfmDisplay();
+    if (!display)
+        return;
+    switch (mode)
+    {
+        case GLFW_CURSOR_HIDDEN:
+        case GLFW_CURSOR_DISABLED:
+            // No pointer-lock support on mobile: the cursor is hidden but
+            // its position is not constrained.
+            glfmSetMouseCursor(display, GLFMMouseCursorNone);
+            break;
+        default:
+            glfmSetMouseCursor(display, GLFMMouseCursorAuto);
+            break;
+    }
 }
 
 void _glfwSetRawMouseMotionGlfm(_GLFWwindow* window, GLFWbool enabled)
@@ -805,11 +861,60 @@ void _glfwSetClipboardStringGlfm(const char* string)
     _glfw.glfm.clipboardString = copy;
 }
 
+// GLFMClipboardTextFunc implementation. Runs on an arbitrary GLFM-owned
+// thread (Apple retrieves the clipboard asynchronously, e.g. for iCloud
+// handoff), so all state changes go through the event-queue lock.
+void _glfmGlfmClipboardTextFunc(GLFMDisplay* display, const char* string)
+{
+    (void) display;
+    pthread_mutex_lock(&glfwm_ev.lock);
+    if (string)
+    {
+        char* copy = _glfw_strdup(string);
+        _glfw_free(_glfw.glfm.clipboardString);
+        _glfw.glfm.clipboardString = copy;
+    }
+    glfwm_ev.clipboardDelivered = GLFW_TRUE;
+    pthread_cond_broadcast(&glfwm_ev.cond);
+    pthread_mutex_unlock(&glfwm_ev.lock);
+}
+
 const char* _glfwGetClipboardStringGlfm(void)
 {
-    // NOTE: GLFM clipboard reads are asynchronous (and may require user
-    // confirmation on the web), so this returns the last string set by the
-    // app. A synchronous-emulating read may be added later.
+    GLFMDisplay* display = _glfmGlfmDisplay();
+    // GLFM clipboard reads are asynchronous (and may require user
+    // confirmation on the web); emulate GLFW's synchronous contract by
+    // waiting for the delivery callback, with a timeout, falling back to the
+    // cached string when nothing is delivered.
+    if (!display || !glfmHasClipboardText(display))
+        return _glfw.glfm.clipboardString;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += (time_t) GLFM_CLIPBOARD_TIMEOUT;
+    ts.tv_nsec += (long) ((GLFM_CLIPBOARD_TIMEOUT - (double) (time_t) GLFM_CLIPBOARD_TIMEOUT) * 1e9);
+    if (ts.tv_nsec >= 1000000000L)
+    {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&glfwm_ev.lock);
+    if (!glfwm_ev.clipboardPending)
+    {
+        glfwm_ev.clipboardPending = GLFW_TRUE;
+        glfwm_ev.clipboardDelivered = GLFW_FALSE;
+        // Called with the lock held: the delivery thread blocks on the lock
+        // and proceeds once this thread enters the timed wait below.
+        glfmRequestClipboardText(display, _glfmGlfmClipboardTextFunc);
+    }
+    while (!glfwm_ev.clipboardDelivered)
+    {
+        if (pthread_cond_timedwait(&glfwm_ev.cond, &glfwm_ev.lock, &ts) == ETIMEDOUT)
+            break;
+    }
+    glfwm_ev.clipboardPending = GLFW_FALSE;
+    pthread_mutex_unlock(&glfwm_ev.lock);
     return _glfw.glfm.clipboardString;
 }
 
@@ -936,6 +1041,7 @@ VkResult _glfwCreateWindowSurfaceGlfm(VkInstance instance,
                                       const VkAllocationCallbacks* allocator,
                                       VkSurfaceKHR* surface)
 {
+    (void) window;
     PFN_vkCreateHeadlessSurfaceEXT vkCreateHeadlessSurfaceEXT =
         (PFN_vkCreateHeadlessSurfaceEXT)
         vkGetInstanceProcAddr(instance, "vkCreateHeadlessSurfaceEXT");
