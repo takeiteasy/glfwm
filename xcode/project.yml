@@ -1,10 +1,9 @@
-# xcodegen spec for the glfwm WebGPU triangle example (iOS).
+# xcodegen spec for the glfwmw WebGPU triangle example (iOS).
 #
 # The app target compiles only the example source; all dependencies are the
-# static libraries produced by the Makefile:
-#   - libglfw3webgpu_glfm.a  (glfw3webgpu bridge, GLFM platform case)
-#   - libglfw3_glfm.a        (GLFW + GLFM backend; provides the entry point)
-#   - libwgpu_native.a       (wgpu-native, Metal + WGSL)
+# single merged static library produced by the Makefile:
+#   - libglfwmw.a  (GLFW + GLFM backend + WebGPU surface bridge + wgpu-native;
+#                   the GLFWM_WGPU flavor)
 #
 # Generate with: xcodegen generate --spec xcode/project.yml --project build/xcode
 # Device builds need a signing team: set DEVELOPMENT_TEAM below or via
@@ -23,18 +22,14 @@ settings:
     ARCHS: arm64
     GCC_PREPROCESSOR_DEFINITIONS:
       - GLFW_INCLUDE_NONE=1
+      - GLFWM_WGPU=1
     HEADER_SEARCH_PATHS:
       - ../../deps
       - ../../deps/glfw/include
       - ../../platform/glfm
       - ../../deps/webgpu
-      - ../../deps/glfw3webgpu
     OTHER_LDFLAGS:
-      # Archive order matters for the linker (single pass): the bridge before
-      # GLFW, wgpu last.
-      - -lglfw3webgpu_glfm
-      - -lglfw3_glfm
-      - -lwgpu_native
+      - -lglfwmw
 
 targets:
   Triangle-Sim:

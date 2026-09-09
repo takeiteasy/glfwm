@@ -1,5 +1,5 @@
 //========================================================================
-// glfwm - GLFM platform extras for GLFW
+// glfwm - GLFW + GLFM (windowing/input for mobile and desktop host)
 //------------------------------------------------------------------------
 // Copyright (c) 2026 George Watson
 //
@@ -38,6 +38,17 @@
 // GLFM_GLFW_PLATFORM is auto-detected for iOS/Android/Emscripten. Builds that
 // target the GLFM backend on desktop macOS (host development) must define
 // GLFM_GLFW_PLATFORM explicitly when compiling application sources.
+//
+// One codebase builds two library flavors:
+//
+//   glfwm  - GLFW + the GLFM platform backend (this header's core section).
+//   glfwmw - glfwm plus wgpu-native and a WebGPU surface bridge, built with
+//            GLFWM_WGPU defined. Adds glfwmwCreateWindowWGPUSurface() below.
+//
+// Applications include this single header either way; the WebGPU API appears
+// only when GLFWM_WGPU is defined (matching the linked library). The surface
+// API uses GLFWwindow*, so <GLFW/glfw3.h> must be included before this
+// header when GLFWM_WGPU is defined.
 //========================================================================
 
 #ifndef glfwm_h
@@ -77,8 +88,24 @@ void* glfwmGetMetalView(void);
 // *Apple platforms only*: Returns the CAMetalLayer to render into, or NULL
 // if Metal is unavailable. This is a dedicated layer managed by the backend
 // (GLFM's MTKView draws underneath it, so the WebGPU surface owns the
-// layer's drawable pool exclusively). Used internally by glfw3webgpu.
+// layer's drawable pool exclusively). Used internally by the surface bridge.
 void* glfwmGetMetalLayer(void);
+
+// ---- glfwmw (WebGPU flavor) ------------------------------------------------
+// Present only in the glfwmw library (built with GLFWM_WGPU defined): glfwm
+// plus wgpu-native and the WebGPU surface bridge.
+
+#ifdef GLFWM_WGPU
+
+#include <webgpu/webgpu.h>
+
+// Creates a WGPUSurface for rendering into the given window. On GLFM (mobile)
+// platforms the surface targets the backend's dedicated CAMetalLayer; on
+// desktop platforms it uses the window's native surface (e.g. the CAMetalLayer
+// of a Cocoa window). Requires a WGPUInstance created with wgpuCreateInstance().
+WGPUSurface glfwmwCreateWindowWGPUSurface(WGPUInstance instance, GLFWwindow* window);
+
+#endif // GLFWM_WGPU
 
 #ifdef GLFM_GLFW_PLATFORM
 

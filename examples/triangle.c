@@ -1,13 +1,15 @@
 //========================================================================
-// glfwm example - WebGPU triangle
+// glfwmw example - WebGPU triangle
 //------------------------------------------------------------------------
 // A plain GLFW + WebGPU program: it runs unchanged on desktop GLFW builds
-// and on GLFM (mobile) builds. Rendering goes through glfw3webgpu, which
-// creates the surface from the native window/view (CAMetalLayer on Apple,
-// including the GLFM platform).
+// and on GLFM (mobile) builds. The glfwmw flavor provides the surface
+// (CAMetalLayer on Apple, including the GLFM platform) via
+// glfwmwCreateWindowWGPUSurface().
 //
 // The loop is the standard GLFW pattern; on GLFM platforms glfwPollEvents
-// is paced to the display refresh by the backend.
+// is paced to the display refresh by the backend. Compiled with GLFWM_WGPU
+// defined (the glfwmw flavor); the surface API lives in the guarded section
+// of glfwm.h, which pulls in webgpu.h.
 //
 // NOTE (portability): adapter/device requests spin on
 // wgpuInstanceProcessEvents, which is correct for native builds. An
@@ -15,8 +17,6 @@
 //========================================================================
 
 #include <GLFW/glfw3.h>
-#include <glfw3webgpu.h>
-#include <webgpu/webgpu.h>
 #include "glfwm.h"
 
 #include <stdio.h>
@@ -135,7 +135,7 @@ int app_main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    WGPUSurface surface = glfwCreateWindowWGPUSurface(instance, window);
+    WGPUSurface surface = glfwmwCreateWindowWGPUSurface(instance, window);
     if (!surface)
     {
         fprintf(stderr, "glfwCreateWindowWGPUSurface failed\n");

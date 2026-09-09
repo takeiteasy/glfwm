@@ -1,10 +1,16 @@
-# glfwm - GLFW + WebGPU + Mobile
+# glfwm / glfwmw - GLFW + GLFM (+ wgpu-native)
 #
-# Builds:
-#   - glfw3webgpu bridge library (GLFW -> WebGPU surface creation)
-#   - GLFW (static, from source) and a combined GLFW + glfw3webgpu shared lib
+# One codebase, two library flavors:
+#   glfwm  - GLFW (static, with the GLFM platform backend) + GLFM: windowing
+#            and input for mobile targets and macOS host development.
+#   glfwmw - glfwm + wgpu-native + the WebGPU surface bridge, merged into a
+#            single static library (the GLFWM_WGPU build flavor).
+#
+# Also builds:
+#   - the glfw3webgpu bridge as a standalone dylib (dynamic_lookup; shares
+#     whatever GLFW instance is loaded in the process)
+#   - a desktop glfwmw shim: combined GLFW (Cocoa) + surface bridge dylib
 #   - wgpu-native (from source, requires cargo)
-#   - GLFW with the GLFM platform backend (mobile targets + macOS host dev)
 #
 # Common Lisp bindings live in ../cl-webgpu (the webgpu_shim layer).
 
@@ -18,19 +24,19 @@ LDFLAGS ?= -shared
 
 # Output library names
 ifeq ($(UNAME_S),Darwin)
-    GLFW_COMBINED_LIB = shim/libglfw3.dylib
+    GLFMW_SHIM_LIB = shim/libglfwmw.dylib
     GLFW_WEBGPU_LIB = shim/libglfw3webgpu.dylib
     GLFW_STATIC = deps/glfw/build/src/libglfw3.a
     WGPU_NATIVE_LIB = libwgpu_native.dylib
     WGPU_NATIVE_TARGET = deps/wgpu-native/target/release/$(WGPU_NATIVE_LIB)
     UNDEFINED_FLAGS = -Wl,-undefined,dynamic_lookup
 else ifeq ($(OS),Windows_NT)
-    GLFW_COMBINED_LIB = shim/glfw3.dll
+    GLFMW_SHIM_LIB = shim/glfwmw.dll
     GLFW_STATIC = deps/glfw/build/src/libglfw3.a
     WGPU_NATIVE_LIB = wgpu_native.dll
     WGPU_NATIVE_TARGET = deps/wgpu-native/target/release/$(WGPU_NATIVE_LIB)
 else
-    GLFW_COMBINED_LIB = shim/libglfw3.so
+    GLFMW_SHIM_LIB = shim/libglfwmw.so
     GLFW_STATIC = deps/glfw/build/src/libglfw3.a
     WGPU_NATIVE_LIB = libwgpu_native.so
     WGPU_NATIVE_TARGET = deps/wgpu-native/target/release/$(WGPU_NATIVE_LIB)
@@ -55,7 +61,7 @@ GLFW3WEBGPU_SRC = deps/glfw3webgpu/glfw3webgpu.c
 
 .PHONY: all clean libwgpu-native libglfw
 
-all: $(GLFW_WEBGPU_LIB)
+all: $(GLFW_WEBGPU_LIB) $(GLFMW_SHIM_LIB)
 
 # Build glfw3webgpu bridge library.
 # Uses -undefined dynamic_lookup so it shares whatever GLFW instance is
@@ -79,22 +85,27 @@ else
 	  -o $@
 endif
 
-# Build combined GLFW + glfw3webgpu shared lib (requires GLFW static build first)
-$(GLFW_COMBINED_LIB): $(GLFW_STATIC)
+# Build the desktop glfwmw shim: combined GLFW (Cocoa) + WebGPU surface
+# bridge + branded glfwmw surface API (requires GLFW static build first).
+# wgpu-native is NOT linked in: it shares whatever wgpu instance/library the
+# process loads (see cl-webgpu), hence -undefined dynamic_lookup.
+$(GLFMW_SHIM_LIB): $(GLFW_STATIC)
 	@mkdir -p shim
 ifeq ($(UNAME_S),Darwin)
 	$(CC) -x objective-c $(CFLAGS) $(GLFW_DEFINES) -dynamiclib \
-	  -I deps/glfw/include -I deps/webgpu -I deps/glfw3webgpu \
-	  -DGLFW_EXPOSE_NATIVE_COCOA \
-	  $(GLFW3WEBGPU_SRC) \
+	  -I deps/glfw/include -I deps/webgpu -I deps/glfw3webgpu -I platform/glfm \
+	  -DGLFW_INCLUDE_NONE -DGLFW_EXPOSE_NATIVE_COCOA -DGLFWM_WGPU \
+	  $(GLFW3WEBGPU_SRC) src/glfwmw_surface.c \
 	  -x none -all_load $(GLFW_STATIC) \
 	  $(GLFW_LDFLAGS) \
 	  $(UNDEFINED_FLAGS) \
+	  -install_name @rpath/libglfwmw.dylib \
 	  -o $@
 else
 	$(CC) $(CFLAGS) $(GLFW_DEFINES) -shared \
-	  -I deps/glfw/include -I deps/webgpu -I deps/glfw3webgpu \
-	  $(GLFW3WEBGPU_SRC) \
+	  -I deps/glfw/include -I deps/webgpu -I deps/glfw3webgpu -I platform/glfm \
+	  -DGLFW_EXPOSE_NATIVE_COCOA -DGLFWM_WGPU \
+	  $(GLFW3WEBGPU_SRC) src/glfwmw_surface.c \
 	  -Wl,--whole-archive $(GLFW_STATIC) -Wl,--no-whole-archive \
 	  $(GLFW_LDFLAGS) \
 	  $(UNDEFINED_FLAGS) \
@@ -123,19 +134,34 @@ libwgpu-native:
 build-all: libglfw libwgpu-native all
 
 clean:
-	rm -f $(GLFW_WEBGPU_LIB) $(GLFW_COMBINED_LIB)
+	rm -f $(GLFW_WEBGPU_LIB) $(GLFMW_SHIM_LIB) shim/*.o
 
 # --- GLFM platform backend ---------------------------------------------------
-# Builds GLFW with the GLFM platform backend plus the glfw3webgpu bridge for:
-#   glfm-host     macOS host development (GLFM runs natively; no simulator)
-#   glfm-ios      iOS device (arm64)
-#   glfm-ios-sim  iOS simulator (arm64)
+# Builds the two glfwm flavors with the GLFM platform backend:
+#   glfwm-host     macOS host development (GLFM runs natively; no simulator)
+#   glfwm-ios      iOS device (arm64)
+#   glfwm-ios-sim  iOS simulator (arm64)
+#
+# Per config (build dir):
+#   libglfwm.a  - GLFW core + GLFM backend (windowing/input only)
+#   libglfwmw.a - libglfwm + glfw3webgpu bridge + branded surface API +
+#                 wgpu-native, merged into a single static library
 #
 # wgpu-native static libs are built by cargo (wgpu-host / wgpu-ios / wgpu-sim).
 
 GLFM_DIR = platform/glfm
 GLFM_MIN_IOS = 15.0
 GLFM_HOST_DIR = build/glfm-host
+
+# wgpu-native static lib paths (needed before the GLFM config eval below;
+# the cargo build rules live in the wgpu section further down).
+WGPU_DIR = deps/wgpu-native
+# Minimal feature set: Metal backend + WGSL input (sufficient for all glfwm
+# targets; the C API is unaffected, so this can be changed without ABI churn).
+WGPU_FEATURES = --no-default-features --features metal,wgsl
+WGPU_HOST_LIB = $(WGPU_DIR)/target/release/libwgpu_native.a
+WGPU_IOS_LIB = $(WGPU_DIR)/target/aarch64-apple-ios/release/libwgpu_native.a
+WGPU_SIM_LIB = $(WGPU_DIR)/target/aarch64-apple-ios-sim/release/libwgpu_native.a
 
 GLFM_CFLAGS = -D_GLFW_GLFM -DGLES_SILENCE_DEPRECATION -O2 -Wall -Wextra -fPIC
 GLFM_INCLUDES = -Ideps/glfw/include -Ideps/glfw/src -Ideps/glfm -I$(GLFM_DIR) \
@@ -197,15 +223,21 @@ $(2)/glfm_backend_glfm_surface.o: $(GLFM_DIR)/glfm_surface.c | $(2)
 $(2)/glfm_apple.o: deps/glfm/glfm_apple.m | $(2)
 	$$(CC) $$(GLFM_CFLAGS) $$(GLFM_INCLUDES) $(3) -x objective-c -c $$< -o $$@
 
-$(2)/libglfw3_glfm.a: $$($(1)_OBJS)
+$(2)/libglfwm.a: $$($(1)_OBJS)
+	libtool -static -o $$@ $$^
+
+# glfwmw: merge the core archive with the surface bridge, the branded surface
+# API and the wgpu-native static lib into one self-contained library.
+$(2)/libglfwmw.a: $(2)/libglfwm.a $(2)/glfw3webgpu_glfm.o $(2)/glfwmw_surface.o $(WGPU_$(4)_LIB)
 	libtool -static -o $$@ $$^
 
 # glfw3webgpu bridge for the GLFM platform (CAMetalLayer surface source)
 $(2)/glfw3webgpu_glfm.o: deps/glfw3webgpu/glfw3webgpu.c | $(2)
-	$$(CC) $$(GLFM_CFLAGS) -DGLFW_INCLUDE_NONE -DGLFW_EXPOSE_NATIVE_GLFM $$(GLFM_INCLUDES) $(3) -x objective-c -c $$< -o $$@
+	$$(CC) $$(GLFM_CFLAGS) -DGLFW_INCLUDE_NONE -DGLFW_EXPOSE_NATIVE_GLFM -DGLFWM_WGPU $$(GLFM_INCLUDES) $(3) -x objective-c -c $$< -o $$@
 
-$(2)/libglfw3webgpu_glfm.a: $(2)/glfw3webgpu_glfm.o
-	libtool -static -o $$@ $$^
+# Branded glfwmw surface API (forwards to the bridge; see src/glfwmw_surface.c)
+$(2)/glfwmw_surface.o: src/glfwmw_surface.c | $(2)
+	$$(CC) $$(GLFM_CFLAGS) -DGLFW_INCLUDE_NONE -DGLFWM_WGPU $$(GLFM_INCLUDES) $(3) -c $$< -o $$@
 
 clean-$(1):
 	rm -rf $(2)
@@ -221,25 +253,18 @@ $(eval $(call GLFM_config,glfm-host,$(GLFM_HOST_DIR),,HOST))
 $(eval $(call GLFM_config,glfm-ios,build/ios-device,-target arm64-apple-ios$(GLFM_MIN_IOS) -isysroot $(GLFM_SDK_DEVICE),IOS))
 $(eval $(call GLFM_config,glfm-ios-sim,build/ios-sim,-target arm64-apple-ios$(GLFM_MIN_IOS)-simulator -isysroot $(GLFM_SDK_SIM),SIM))
 
-.PHONY: glfm-host glfm-ios glfm-ios-sim clean-glfm
+.PHONY: glfwm-host glfwm-ios glfwm-ios-sim glfwmw-host glfwmw-ios glfwmw-ios-sim clean-glfm
 
-glfm-host: $(GLFM_HOST_DIR)/hello_glfm \
-           $(GLFM_HOST_DIR)/libglfw3_glfm.a $(GLFM_HOST_DIR)/libglfw3webgpu_glfm.a
-glfm-ios: build/ios-device/libglfw3_glfm.a build/ios-device/libglfw3webgpu_glfm.a build/ios-device/libwgpu_native.a
-glfm-ios-sim: build/ios-sim/libglfw3_glfm.a build/ios-sim/libglfw3webgpu_glfm.a build/ios-sim/libwgpu_native.a
+glfwm-host: $(GLFM_HOST_DIR)/hello_glfwm $(GLFM_HOST_DIR)/libglfwm.a
+glfwm-ios: build/ios-device/libglfwm.a
+glfwm-ios-sim: build/ios-sim/libglfwm.a
+glfwmw-host: $(GLFM_HOST_DIR)/triangle $(GLFM_HOST_DIR)/libglfwmw.a
+glfwmw-ios: build/ios-device/libglfwmw.a
+glfwmw-ios-sim: build/ios-sim/libglfwmw.a
 
 clean-glfm: clean-glfm-host clean-glfm-ios clean-glfm-ios-sim
 
 # --- wgpu-native (cargo) -----------------------------------------------------
-
-WGPU_DIR = deps/wgpu-native
-# Minimal feature set: Metal backend + WGSL input (sufficient for all glfwm
-# targets; the C API is unaffected, so this can be changed without ABI churn).
-WGPU_FEATURES = --no-default-features --features metal,wgsl
-
-WGPU_HOST_LIB = $(WGPU_DIR)/target/release/libwgpu_native.a
-WGPU_IOS_LIB = $(WGPU_DIR)/target/aarch64-apple-ios/release/libwgpu_native.a
-WGPU_SIM_LIB = $(WGPU_DIR)/target/aarch64-apple-ios-sim/release/libwgpu_native.a
 
 # Route through the toolchain pinned by deps/wgpu-native/rust-toolchain.toml:
 # the rustc/cargo in PATH may be a Homebrew build that ignores the toolchain
@@ -256,36 +281,36 @@ wgpu-ios:
 wgpu-sim:
 	cd $(WGPU_DIR) && RUSTC="$(WGPU_RUSTC)" "$(WGPU_CARGO)" build --release --target aarch64-apple-ios-sim $(WGPU_FEATURES)
 
-# Stage the wgpu-native static libs next to the GLFW libs for the Xcode app
-# targets (which link everything from build/ios-*).
-build/ios-device/libwgpu_native.a: $(WGPU_IOS_LIB)
-	cp $< $@
-build/ios-sim/libwgpu_native.a: $(WGPU_SIM_LIB)
-	cp $< $@
+# File rules so libglfwmw.a can depend on the cargo-built static libs; cargo
+# decides whether a rebuild is actually needed.
+$(WGPU_HOST_LIB):
+	$(MAKE) wgpu-host
+$(WGPU_IOS_LIB):
+	$(MAKE) wgpu-ios
+$(WGPU_SIM_LIB):
+	$(MAKE) wgpu-sim
 
-# --- GLFM host smoke test and WebGPU example ---------------------------------
+# --- GLFM host smoke test (glfwm) and WebGPU example (glfwmw) ----------------
 
 GLFM_HOST_FRAMEWORKS = \
 	-framework AppKit -framework Foundation -framework Metal -framework MetalKit \
 	-framework IOKit -framework Carbon -framework CoreFoundation -framework QuartzCore
 
-$(GLFM_HOST_DIR)/hello_glfm.o: test/glfm_hello.c | $(GLFM_HOST_DIR)
+$(GLFM_HOST_DIR)/hello_glfwm.o: test/glfm_hello.c | $(GLFM_HOST_DIR)
 	$(CC) -DGLFM_GLFW_PLATFORM -O2 -Wall -Wextra -Ideps/glfw/include -I$(GLFM_DIR) -c $< -o $@
 
-$(GLFM_HOST_DIR)/hello_glfm: $(GLFM_HOST_DIR)/hello_glfm.o $(GLFM_HOST_DIR)/libglfw3_glfm.a
+$(GLFM_HOST_DIR)/hello_glfwm: $(GLFM_HOST_DIR)/hello_glfwm.o $(GLFM_HOST_DIR)/libglfwm.a
 	$(CC) $^ -o $@ $(GLFM_HOST_FRAMEWORKS)
 
 $(GLFM_HOST_DIR)/triangle.o: examples/triangle.c | $(GLFM_HOST_DIR)
-	$(CC) -DGLFM_GLFW_PLATFORM -DGLFW_INCLUDE_NONE $(GLFM_CFLAGS) $(GLFM_INCLUDES) -c $< -o $@
+	$(CC) -DGLFM_GLFW_PLATFORM -DGLFW_INCLUDE_NONE -DGLFWM_WGPU $(GLFM_CFLAGS) $(GLFM_INCLUDES) -c $< -o $@
 
-$(GLFM_HOST_DIR)/triangle: $(GLFM_HOST_DIR)/triangle.o \
-		$(GLFM_HOST_DIR)/libglfw3webgpu_glfm.a \
-		$(GLFM_HOST_DIR)/libglfw3_glfm.a \
-		$(WGPU_HOST_LIB)
+# Links the single merged libglfwmw.a (GLFW + backend + bridge + wgpu-native).
+$(GLFM_HOST_DIR)/triangle: $(GLFM_HOST_DIR)/triangle.o $(GLFM_HOST_DIR)/libglfwmw.a
 	$(CC) $^ -o $@ $(GLFM_HOST_FRAMEWORKS)
 
-.PHONY: glfm-host-triangle
-glfm-host-triangle: $(GLFM_HOST_DIR)/triangle
+.PHONY: glfwmw-host-triangle
+glfwmw-host-triangle: $(GLFM_HOST_DIR)/triangle
 
 # --- Xcode project (xcodegen) ------------------------------------------------
 # Generates the iOS example project and builds/runs it on the simulator.
@@ -302,7 +327,7 @@ xcodegen:
 	  xcodegen generate --spec xcode/project.yml --project build/xcode; \
 	}
 
-sim-build: wgpu-sim glfm-ios-sim xcodegen
+sim-build: wgpu-sim glfwmw-ios-sim xcodegen
 	xcodebuild -project build/xcode/GlfwmTriangle.xcodeproj \
 	  -scheme Triangle-Sim -configuration Release \
 	  -destination 'generic/platform=iOS Simulator' \
